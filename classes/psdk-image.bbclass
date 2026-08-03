@@ -273,9 +273,15 @@ do_generate_qirp_sdk[file-checksums] = " \
 # Add dependency on packagegroup RDEPENDS collection tasks
 python () {
     pn = d.getVar("PN")
-    
-    # Check if this is a robotics image
-    if pn in ["qcom-robotics-image", "qcom-robotics-proprietary-image"]:
+
+    # Wire up the QIRP SDK dependencies for any robotics image. This fires for
+    # the dedicated robotics image recipes as well as for any base image (e.g.
+    # qcom-multimedia-image) that opts into the robotics content through the
+    # "ros2-jazzy" distro feature, so integration layers no longer need to
+    # duplicate this wiring. Non-robotics builds never inherit this class, and
+    # the gate below keeps the anonymous function a no-op even if they did.
+    robotics_variant = bb.utils.contains('DISTRO_FEATURES', 'ros2-jazzy', True, False, d)
+    if pn in ["qcom-robotics-image", "qcom-robotics-proprietary-image"] or robotics_variant:
         # Determine which packagegroups to depend on
         if "proprietary" in pn:
             pkg_groups = [
