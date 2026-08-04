@@ -140,21 +140,15 @@ process_runtime() {
 
     # Determine which packagegroup list files to read
     PACKAGEGROUP_LIST_DIR="${DEPLOY_DIR}/packagegroup-lists"
-    
-    if echo "${PN}" | grep -q proprietary; then
-        # Proprietary image: three packagegroups
-        LIST_FILES=" \
-            ${PACKAGEGROUP_LIST_DIR}/packagegroup-robotics-opensource.list \
-            ${PACKAGEGROUP_LIST_DIR}/packagegroup-oss-with-prop-deps.list \
-            ${PACKAGEGROUP_LIST_DIR}/packagegroup-robotics-proprietary.list \
-        "
-        bbnote "Processing proprietary image with 3 packagegroup lists"
-    else
-        # Open-source image: one packagegroup
-        LIST_FILES="${PACKAGEGROUP_LIST_DIR}/packagegroup-robotics-opensource.list"
-        bbnote "Processing open-source image with 1 packagegroup list"
-    fi
-    
+
+    # Same source of truth as the anonymous python below, so the lists we
+    # require can never diverge from the do_collect_rdepends dependencies.
+    LIST_FILES=""
+    for pkg_group in ${QIRP_SDK_PACKAGEGROUPS}; do
+        LIST_FILES="${LIST_FILES} ${PACKAGEGROUP_LIST_DIR}/${pkg_group}.list"
+    done
+    bbnote "Processing ${PN} with packagegroup lists:${LIST_FILES}"
+
     # Check if list files exist - exit with error if any are missing
     missing_files=""
     for list_file in ${LIST_FILES}; do
@@ -268,58 +262,56 @@ do_generate_qirp_sdk[file-checksums] = " \
     ${ROBIOTICS_LAYER_DIR}/recipes-sdk/files/samples.json:True \
 "
 
+# Packagegroups whose do_collect_rdepends output feeds the SDK runtime package
+# collection. Integration layers can point this at their own images from a
+# distro include instead of patching this class. The default reproduces the
+# historical behaviour of the dedicated robotics image recipes exactly.
+QIRP_SDK_PACKAGEGROUPS ?= "${@'packagegroup-robotics-opensource packagegroup-oss-with-prop-deps packagegroup-robotics-proprietary' if 'proprietary' in (d.getVar('PN') or '') else 'packagegroup-robotics-opensource'}"
+
 # Add task dependencies so the packagegroup dependency lists are generated
 # before runtime package collection starts.
 # Add dependency on packagegroup RDEPENDS collection tasks
 python () {
     pn = d.getVar("PN")
-    
-    # Check if this is a robotics image
-    if pn in ["qcom-robotics-image", "qcom-robotics-proprietary-image"]:
-        # Determine which packagegroups to depend on
-        if "proprietary" in pn:
-            pkg_groups = [
-                "packagegroup-robotics-opensource",
-                "packagegroup-oss-with-prop-deps",
-                "packagegroup-robotics-proprietary"
-            ]
-        else:
-            pkg_groups = ["packagegroup-robotics-opensource"]
-        
-        # Add dependencies
-        for pkg_group in pkg_groups:
-            d.appendVarFlag('do_generate_qirp_sdk', 'depends', 
-                           ' {}:do_collect_rdepends'.format(pkg_group))
-        
-        bb.note("Added dependencies for {}: {}".format(pn, ", ".join(pkg_groups)))
-        
-        # Add dependencies on sample source code copy tasks
-        # Read content_config.json to get list of samples
-        import json
-        import os
-        
-        robotics_layer_dir = d.getVar("ROBIOTICS_LAYER_DIR")
-        config_file = os.path.join(robotics_layer_dir, "recipes-sdk/files/content_config.json")
-        
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r') as f:
-                    config_data = json.load(f)
-                
-                samples = config_data.get("samples", [])
-                sample_names = [sample.get("name") for sample in samples if sample.get("name")]
-                
-                if sample_names:
-                    bb.note("Adding dependencies on sample source copy tasks for: {}".format(", ".join(sample_names)))
-                    for sample_name in sample_names:
-                        d.appendVarFlag('do_generate_qirp_sdk', 'depends',
-                                       ' {}:do_copy_source_to_deploy'.format(sample_name))
-                else:
-                    bb.note("No samples found in content_config.json")
-            except Exception as e:
-                bb.warn("Failed to read or parse content_config.json: {}".format(str(e)))
-        else:
-            bb.warn("content_config.json not found at: {}".format(config_file))
+
+    # Any image inheriting this class wants a QIRP SDK; which packagegroups feed
+    # it is data, not a hardcoded recipe-name whitelist.
+    pkg_groups = (d.getVar("QIRP_SDK_PACKAGEGROUPS") or "").split()
+
+    # Add dependencies
+    for pkg_group in pkg_groups:
+        d.appendVarFlag('do_generate_qirp_sdk', 'depends',
+                       ' {}:do_collect_rdepends'.format(pkg_group))
+
+    bb.note("Added dependencies for {}: {}".format(pn, ", ".join(pkg_groups)))
+
+    # Add dependencies on sample source code copy tasks
+    # Read content_config.json to get list of samples
+    import json
+    import os
+
+    robotics_layer_dir = d.getVar("ROBIOTICS_LAYER_DIR")
+    config_file = os.path.join(robotics_layer_dir, "recipes-sdk/files/content_config.json")
+
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config_data = json.load(f)
+
+            samples = config_data.get("samples", [])
+            sample_names = [sample.get("name") for sample in samples if sample.get("name")]
+
+            if sample_names:
+                bb.note("Adding dependencies on sample source copy tasks for: {}".format(", ".join(sample_names)))
+                for sample_name in sample_names:
+                    d.appendVarFlag('do_generate_qirp_sdk', 'depends',
+                                   ' {}:do_copy_source_to_deploy'.format(sample_name))
+            else:
+                bb.note("No samples found in content_config.json")
+        except Exception as e:
+            bb.warn("Failed to read or parse content_config.json: {}".format(str(e)))
+    else:
+        bb.warn("content_config.json not found at: {}".format(config_file))
 }
 
 SSTATETASKS += "do_generate_qirp_sdk "
